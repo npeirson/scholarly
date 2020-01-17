@@ -3,7 +3,7 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 from bs4 import BeautifulSoup
-
+import urllib
 import arrow
 import bibtexparser
 import codecs
@@ -23,12 +23,12 @@ _HEADERS = {
     'accept': 'text/html,application/xhtml+xml,application/xml'
     }
 _HOST = 'https://scholar.google.com'
-_AUTHSEARCH = '/citations?view_op=search_authors&hl=en&mauthors={0}'
-_CITATIONAUTH = '/citations?user={0}&hl=en'
-_CITATIONPUB = '/citations?view_op=view_citation&citation_for_view={0}'
-_KEYWORDSEARCH = '/citations?view_op=search_authors&hl=en&mauthors=label:{0}'
-_PUBSEARCH = '/scholar?q={0}'
-_SCHOLARPUB = '/scholar?oi=bibs&hl=en&cites={0}'
+_AUTHSEARCH = '/citations?hl=en&view_op=search_authors&mauthors={0}'
+_CITATIONAUTH = '/citations?hl=en&user={0}'
+_CITATIONPUB = '/citations?hl=en&view_op=view_citation&citation_for_view={0}'
+_KEYWORDSEARCH = '/citations?hl=en&view_op=search_authors&mauthors=label:{0}'
+_PUBSEARCH = '/scholar?hl=en&q={0}'
+_SCHOLARPUB = '/scholar?hl=en&oi=bibs&cites={0}'
 
 _CITATIONAUTHRE = r'user=([\w-]*)'
 _CITATIONPUBRE = r'citation_for_view=([\w-]*:[\w-]*)'
@@ -147,6 +147,13 @@ class Publication(object):
             year = __data.find(class_='gsc_a_h')
             if year and year.text and not year.text.isspace() and len(year.text)>0:
                 self.bib['year'] = int(year.text)
+            href = __data.find('a', "gsc_a_ac")
+            url = (((str(href).split(" "))[3]).split(">"))[0]
+            citeslist = url.split("cites=")
+            cites = []
+            if len(citeslist) > 1:
+                cites = (citeslist[1][:-1]).split(",")
+            self.id_scholarcitedby = cites
         elif self.source == 'scholar':
             databox = __data.find('div', class_='gs_ri')
             title = databox.find('h3', class_='gs_rt')
@@ -158,7 +165,11 @@ class Publication(object):
             if title.find('a'):
                 self.bib['url'] = title.find('a')['href']
             authorinfo = databox.find('div', class_='gs_a')
-            self.bib['author'] = ' and '.join([i.strip() for i in authorinfo.text.split(' - ')[0].split(',')])
+            ai_fields = authorinfo.text.split(' - ')
+            self.bib['author'] = ' and '.join([i.strip() for i in ai_fields[0].split(',')])
+            self.bib['year'] = ai_fields[1].split(',')[1].strip()
+            self.bib['journal'] = ai_fields[1].split(',')[0].strip()
+            self.bib['publisher'] = ai_fields[2].strip()
             if databox.find('div', class_='gs_rs'):
                 self.bib['abstract'] = databox.find('div', class_='gs_rs').text
                 if self.bib['abstract'][0:8].lower() == 'abstract':
@@ -227,7 +238,13 @@ class Publication(object):
         if not hasattr(self, 'id_scholarcitedby'):
             self.fill()
         if hasattr(self, 'id_scholarcitedby'):
-            url = _SCHOLARPUB.format(requests.utils.quote(self.id_scholarcitedby))
+            #url = _SCHOLARPUB.format(requests.utils.quote(self.id_scholarcitedby))
+            stringcites = ""
+            for cite in self.id_scholarcitedby:
+                stringcites += urllib.parse.quote(
+                    bytes(cite, encoding='utf8')) + ","
+
+            url = _SCHOLARPUB.format(requests.utils.quote(stringcites))
             soup = _get_soup(_HOST+url)
             return _search_scholar_soup(soup)
         else:
@@ -313,12 +330,29 @@ class Author(object):
     def __str__(self):
         return pprint.pformat(self.__dict__)
 
-
-def search_pubs_query(query):
-    """Search by scholar query and return a generator of Publication objects"""
+def search_pubs_query(query, lang='en', patents=True, year_low=None, year_high=None):
+    """
+    Searches by scholar query and returns a generator of Publication objects.
+    
+    search_pubs_query(query, lang='en', patents=True, year_low=None, year_high=None)
+    Args:
+        query: string with search terms
+        lang: string, for language (default 'en')
+        patents: bool, whether to include patents in search results (default True)
+        year_low: int, if given, earliest year from which to include results (default None)
+        year_high: int, if given, latest year from which to include results (default None)
+    Returns:
+        generator object with search results
+    Example:
+        s = scholarly.search_pubs_query('cancer', year_low=2015)
+    """
     url = _PUBSEARCH.format(requests.utils.quote(query))
+    yr_lo = '&as_ylo={0}'.format(year_low) if year_low is not None else ''
+    yr_hi = '&as_yhi={0}'.format(year_high) if year_high is not None else ''
+    url = url + '&hl={0}&as_sdt={1},5{2}{3}'.format(lang, 1- int(patents), yr_lo, yr_hi)
     soup = _get_soup(_HOST+url)
     return _search_scholar_soup(soup)
+
 
 
 def search_author(name):
